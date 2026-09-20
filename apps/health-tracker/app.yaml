@@ -1,0 +1,11 @@
+command:
+  - python
+  - app.py
+
+env:
+  - name: DATABRICKS_CATALOG
+    value: "dbws_weu_dev"
+  - name: DATABRICKS_SCHEMA
+    value: "health_tracker"
+  - name: DATABRICKS_WAREHOUSE_ID
+    value: "2f90bf2f6e5ae73f"
