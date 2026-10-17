@@ -24,7 +24,6 @@ SCHEMA = os.environ.get("DATABRICKS_SCHEMA", "health_tracker")
 
 TABLE_HEALTH = f"`{CATALOG}`.`{SCHEMA}`.health_metrics"
 TABLE_NUTRITION = f"`{CATALOG}`.`{SCHEMA}`.nutrition_reference"
-TABLE_CONSUMPTION = f"`{CATALOG}`.`{SCHEMA}`.consumption_log"
 TABLE_CONSUMPTION_RESOLVED = f"`{CATALOG}`.`{SCHEMA}`.consumption_resolved"
 
 VIEW_HEALTH_REPORT = f"`{CATALOG}`.`{SCHEMA}`.health_metrics_report"
@@ -207,16 +206,6 @@ def init_tables():
             fiber_g DOUBLE,
             protein_g DOUBLE,
             fat_g DOUBLE
-        ) USING DELTA
-    """)
-    execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_CONSUMPTION} (
-            date DATE,
-            time TIMESTAMP,
-            name STRING,
-            pieces DOUBLE,
-            grams DOUBLE,
-            ml DOUBLE
         ) USING DELTA
     """)
     execute(f"""
