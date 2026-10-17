@@ -24,7 +24,7 @@ SCHEMA = os.environ.get("DATABRICKS_SCHEMA", "health_tracker")
 
 TABLE_HEALTH = f"`{CATALOG}`.`{SCHEMA}`.health_metrics"
 TABLE_NUTRITION = f"`{CATALOG}`.`{SCHEMA}`.nutrition_reference"
-TABLE_CONSUMPTION = f"`{CATALOG}`.`{SCHEMA}`.consumption_log"
+TABLE_CONSUMPTION_RESOLVED = f"`{CATALOG}`.`{SCHEMA}`.consumption_resolved"
 
 VIEW_HEALTH_REPORT = f"`{CATALOG}`.`{SCHEMA}`.health_metrics_report"
 VIEW_CONSUMPTION_REPORT = f"`{CATALOG}`.`{SCHEMA}`.consumption_report"
@@ -120,6 +120,49 @@ def execute(query, fetch=False):
 
 
 # ---------------------------------------------------------------------------
+# Resolved consumption persistence helper
+# ---------------------------------------------------------------------------
+def _insert_resolved(date_val, time_val, name, measurement_size, measurement_type,
+                     energy, fat, sat_fat, unsat_fat, carbs, sugar,
+                     protein, fiber, salt):
+    """Insert a pre-resolved consumption row into consumption_resolved."""
+    def nv(x):
+        return round(float(x), 4) if x else 0
+    safe_name = str(name).replace("'", "''")
+    execute(f"""
+        INSERT INTO {TABLE_CONSUMPTION_RESOLVED}
+        (date, time, name, measurement_size, measurement_type,
+         energy_log, fat_log, saturated_fat_log, unsaturated_fat_log,
+         carbs_log, sugar_log, protein_log, fiber_log, salt_log)
+        VALUES ('{date_val}', '{time_val}', '{safe_name}', {nv(measurement_size)}, '{measurement_type}',
+                {nv(energy)}, {nv(fat)}, {nv(sat_fat)}, {nv(unsat_fat)},
+                {nv(carbs)}, {nv(sugar)}, {nv(protein)}, {nv(fiber)}, {nv(salt)})
+    """)
+
+
+def _resolve_and_insert(date_val, time_val, name, ref_row, size):
+    """Compute resolved nutritional values from a nutrition_reference row and insert."""
+    measurement = ref_row["measurement"]
+    factor = size / 100.0
+    _insert_resolved(
+        date_val=date_val,
+        time_val=time_val,
+        name=name,
+        measurement_size=size,
+        measurement_type=measurement,
+        energy=factor * float(ref_row.get("energy_kcal") or 0),
+        fat=factor * float(ref_row.get("fat_g") or 0),
+        sat_fat=factor * float(ref_row.get("saturated_fat_g") or 0),
+        unsat_fat=factor * float(ref_row.get("unsaturated_fat_g") or 0),
+        carbs=factor * float(ref_row.get("carbs_g") or 0),
+        sugar=factor * float(ref_row.get("sugar_g") or 0),
+        protein=factor * float(ref_row.get("protein_g") or 0),
+        fiber=factor * float(ref_row.get("fiber_g") or 0),
+        salt=factor * float(ref_row.get("salt_g") or 0),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Cache for nutrition items (avoids DB query on every keystroke)
 # ---------------------------------------------------------------------------
 _nutrition_cache = {"items": [], "ts": 0}
@@ -164,19 +207,26 @@ def init_tables():
         ) USING DELTA
     """)
     execute(f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_CONSUMPTION} (
+        CREATE TABLE IF NOT EXISTS {TABLE_CONSUMPTION_RESOLVED} (
             date DATE,
             time TIMESTAMP,
             name STRING,
-            pieces DOUBLE,
-            grams DOUBLE,
-            ml DOUBLE
+            measurement_size DOUBLE COMMENT 'total size in g or ml',
+            measurement_type STRING COMMENT 'g or ml',
+            energy_log DOUBLE,
+            fat_log DOUBLE,
+            saturated_fat_log DOUBLE,
+            unsaturated_fat_log DOUBLE,
+            carbs_log DOUBLE,
+            sugar_log DOUBLE,
+            protein_log DOUBLE,
+            fiber_log DOUBLE,
+            salt_log DOUBLE
         ) USING DELTA
     """)
 
 
-# Tables are pre-created in dbws_weu_dev.health_tracker
-# init_tables()
+init_tables()
 
 # ---------------------------------------------------------------------------
 # Translations
@@ -218,15 +268,14 @@ T = {
         "log_consumption": "Log Consumption",
         "food_drink": "Food/Drink name",
         "portions": "Portions",
-        "grams": "Grams",
-        "ml": "ml",
+        "units": "Units",
         "consumption_log": "Consumption Log",
         "no_entries": "No entries for this date.",
         "no_entries_yet": "No entries yet.",
         "total": "TOTAL",
         "no_match": "No matching items found.",
         "not_found": "Item not found in nutrition reference. Please register it first.",
-        "qty_required": "Enter a quantity (portions, grams, or ml).",
+        "qty_required": "Enter a quantity (portions or units).",
         "logged": "Logged",
         "tab_reports": "Reports",
         "tab_entry": "Data Entry",
@@ -281,15 +330,14 @@ T = {
         "log_consumption": "Fogyaszt\u00e1s r\u00f6gz\u00edt\u00e9se",
         "food_drink": "\u00c9tel/Ital n\u00e9v",
         "portions": "Adag",
-        "grams": "Gramm",
-        "ml": "ml",
+        "units": "Egység",
         "consumption_log": "Fogyaszt\u00e1si napl\u00f3",
         "no_entries": "Nincs bejegyz\u00e9s erre a napra.",
         "no_entries_yet": "M\u00e9g nincs bejegyz\u00e9s.",
         "total": "\u00d6SSZESEN",
         "no_match": "Nincs tal\u00e1lat.",
         "not_found": "Nem tal\u00e1lhat\u00f3 a t\u00e1p\u00e9rt\u00e9k referenci\u00e1ban. Regisztr\u00e1ld el\u0151sz\u00f6r!",
-        "qty_required": "Adj meg mennyis\u00e9get (adag, gramm, vagy ml).",
+        "qty_required": "Adj meg mennyis\u00e9get (adag vagy egység).",
         "logged": "R\u00f6gz\u00edtve",
         "tab_reports": "Eredm\u00e9nyek",
         "health_summary": "Eg\u00e9szs\u00e9g\u00fcgyi \u00f6sszefoglal\u00f3",
@@ -308,8 +356,6 @@ T = {
 COL_NAMES = {
     "name": "name",
     "portions": "portions",
-    "grams": "grams",
-    "ml": "ml",
     "energy_kcal": "energy",
     "carbs_g": "carbs",
     "sugar_g": "sugar",
@@ -322,6 +368,7 @@ COL_NAMES = {
     "fiber_g": "fiber",
     "salt_g": "salt",
     "measurement": "measurement",
+    "measurement_size": "portion_size",
     "has_portion": "portion",
     "portion_size": "portion_size",
     "date": "date",
@@ -473,8 +520,7 @@ def render_entry_tab(lang):
                          searchable=True, style={"width": "250px"}),
             html.Div(id="cons-suggestions", style={"fontSize": "12px", "color": "#555", "marginLeft": "5px"}),
             html.Label(T[lang]["portions"]), dcc.Input(id="cons-pieces", type="number", step=0.5, style={"width": "70px"}),
-            html.Label(T[lang]["grams"]), dcc.Input(id="cons-grams", type="number", style={"width": "70px"}),
-            html.Label(T[lang]["ml"]), dcc.Input(id="cons-ml", type="number", style={"width": "70px"}),
+            html.Label(T[lang]["units"]), dcc.Input(id="cons-units", type="number", style={"width": "70px"}),
             html.Button(T[lang]["save"], id="cons-save", n_clicks=0),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "5px"}),
         html.Div(id="cons-msg", style={"marginTop": "5px", "color": "green"}),
@@ -685,17 +731,24 @@ def save_adhoc(n, date_val, measurement, portion_size, energy, carbs, sugar, fat
                 {nv(energy)}, {nv(carbs)}, {nv(sugar)}, {nv(fat)}, {nv(sat_fat)}, {nv(unsat_fat)}, {nv(protein)}, {nv(fiber)}, {nv(salt)})
     """)
 
-    # Log consumption
+    # Persist resolved consumption directly (adhoc values are per-100, scale by portion)
     now = datetime.datetime.now()
-    execute(f"""
-        INSERT INTO {TABLE_CONSUMPTION} (date, time, name, pieces, grams, ml)
-        VALUES ('{date_val}', '{now.isoformat()}', '{name}', 1, {grams_val}, {ml_val})
-    """)
+    size = float(portion_size) if portion_size else 0
+    factor = size / 100.0
+    _insert_resolved(
+        date_val=date_val,
+        time_val=now.isoformat(),
+        name=name,
+        measurement_size=size,
+        measurement_type=measurement,
+        energy=factor * nv(energy), fat=factor * nv(fat),
+        sat_fat=factor * nv(sat_fat), unsat_fat=factor * nv(unsat_fat),
+        carbs=factor * nv(carbs), sugar=factor * nv(sugar),
+        protein=factor * nv(protein), fiber=factor * nv(fiber),
+        salt=factor * nv(salt),
+    )
+
     msg = f"Logged '{name}'!"
-    if grams_val and portions_val and not grams:
-        msg += f" ({portions_val} portions = {grams_val}g)"
-    elif ml_val and portions_val and not ml:
-        msg += f" ({portions_val} portions = {ml_val}ml)"
     return msg, (refresh or 0) + 1
 
 
@@ -794,7 +847,7 @@ def delete_consumption_entry(n_clicks_list, refresh):
     # stored values have microseconds (2026-08-07 09:22:32.257087).
     # Normalize format and use prefix match to bridge the precision gap.
     normalized = entry_time.replace('T', ' ').rstrip('Z')
-    execute(f"DELETE FROM {TABLE_CONSUMPTION} WHERE CAST(time AS STRING) LIKE '{normalized}%'")
+    execute(f"DELETE FROM {TABLE_CONSUMPTION_RESOLVED} WHERE CAST(time AS STRING) LIKE '{normalized}%'")
     return (refresh or 0) + 1
 
 
@@ -984,27 +1037,27 @@ def _build_health_table(lang):
 def _build_day_table(date_str, lang, show_delete=False):
     """Build a consumption summary table for a single date. Returns html component or None."""
     df = execute(f"""
-        SELECT c.time AS _entry_time, c.name, c.pieces AS portions, c.grams, c.ml,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.energy_kcal, 1) AS energy_kcal,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.carbs_g, 1) AS carbs_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.sugar_g, 1) AS sugar_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.fat_g, 1) AS fat_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.saturated_fat_g, 1) AS sat_fat_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.unsaturated_fat_g, 1) AS unsat_fat_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.protein_g, 1) AS protein_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.fiber_g, 1) AS fiber_g,
-            ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.salt_g, 2) AS salt_g
-        FROM {TABLE_CONSUMPTION} c
-        LEFT JOIN {TABLE_NUTRITION} n ON LOWER(c.name) = LOWER(n.name)
-        WHERE c.date = '{date_str}'
-        ORDER BY c.time DESC
+        SELECT time AS _entry_time, name,
+            ROUND(measurement_size, 1) AS measurement_size,
+            ROUND(energy_log, 1) AS energy_kcal,
+            ROUND(carbs_log, 1) AS carbs_g,
+            ROUND(sugar_log, 1) AS sugar_g,
+            ROUND(fat_log, 1) AS fat_g,
+            ROUND(saturated_fat_log, 1) AS sat_fat_g,
+            ROUND(unsaturated_fat_log, 1) AS unsat_fat_g,
+            ROUND(protein_log, 1) AS protein_g,
+            ROUND(fiber_log, 1) AS fiber_g,
+            ROUND(salt_log, 2) AS salt_g
+        FROM {TABLE_CONSUMPTION_RESOLVED}
+        WHERE date = '{date_str}'
+        ORDER BY time DESC
     """, fetch=True)
     if df.empty:
         return None
     # Separate the entry_time identifier from display columns
     display_cols = [c for c in df.columns if c != "_entry_time"]
     # Build totals row
-    numeric_cols = ["portions", "grams", "ml", "energy_kcal", "carbs_g", "sugar_g",
+    numeric_cols = ["measurement_size", "energy_kcal", "carbs_g", "sugar_g",
                     "fat_g", "sat_fat_g", "unsat_fat_g", "protein_g", "fiber_g", "salt_g"]
     totals = {}
     for c in display_cols:
@@ -1067,9 +1120,19 @@ def load_consumption_report(_, lang):
     lang = lang or "en"
 
     df = execute(f"""
-        SELECT date, kcal, carbs, sugar, fat, saturated_fat, unsaturated_fat,
-               protein, fiber, salt
-        FROM {VIEW_CONSUMPTION_REPORT}
+        SELECT date,
+               ROUND(SUM(energy_log), 1) AS kcal,
+               ROUND(SUM(carbs_log), 1) AS carbs,
+               ROUND(SUM(sugar_log), 1) AS sugar,
+               ROUND(SUM(fat_log), 1) AS fat,
+               ROUND(SUM(saturated_fat_log), 1) AS saturated_fat,
+               ROUND(SUM(unsaturated_fat_log), 1) AS unsaturated_fat,
+               ROUND(SUM(protein_log), 1) AS protein,
+               ROUND(SUM(fiber_log), 1) AS fiber,
+               ROUND(SUM(salt_log), 2) AS salt
+        FROM {TABLE_CONSUMPTION_RESOLVED}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+        GROUP BY date
         ORDER BY date
     """, fetch=True)
     if df.empty:
@@ -1078,19 +1141,40 @@ def load_consumption_report(_, lang):
     display_cols = list(df.columns)
     numeric_cols = [c for c in display_cols if c != "date"]
 
-    # Summary rows from pre-aggregated views
+    # Summary rows computed directly from consumption_resolved
+    sdf = execute(f"""
+        SELECT ROUND(MIN(daily_kcal), 1) AS min_kcal, ROUND(MAX(daily_kcal), 1) AS max_kcal, ROUND(AVG(daily_kcal), 1) AS avg_kcal,
+               ROUND(MIN(daily_carbs), 1) AS min_carbs, ROUND(MAX(daily_carbs), 1) AS max_carbs, ROUND(AVG(daily_carbs), 1) AS avg_carbs,
+               ROUND(MIN(daily_sugar), 1) AS min_sugar, ROUND(MAX(daily_sugar), 1) AS max_sugar, ROUND(AVG(daily_sugar), 1) AS avg_sugar,
+               ROUND(MIN(daily_fat), 1) AS min_fat, ROUND(MAX(daily_fat), 1) AS max_fat, ROUND(AVG(daily_fat), 1) AS avg_fat,
+               ROUND(MIN(daily_sat_fat), 1) AS min_saturated_fat, ROUND(MAX(daily_sat_fat), 1) AS max_saturated_fat, ROUND(AVG(daily_sat_fat), 1) AS avg_saturated_fat,
+               ROUND(MIN(daily_unsat_fat), 1) AS min_unsaturated_fat, ROUND(MAX(daily_unsat_fat), 1) AS max_unsaturated_fat, ROUND(AVG(daily_unsat_fat), 1) AS avg_unsaturated_fat,
+               ROUND(MIN(daily_protein), 1) AS min_protein, ROUND(MAX(daily_protein), 1) AS max_protein, ROUND(AVG(daily_protein), 1) AS avg_protein,
+               ROUND(MIN(daily_fiber), 1) AS min_fiber, ROUND(MAX(daily_fiber), 1) AS max_fiber, ROUND(AVG(daily_fiber), 1) AS avg_fiber,
+               ROUND(MIN(daily_salt), 2) AS min_salt, ROUND(MAX(daily_salt), 2) AS max_salt, ROUND(AVG(daily_salt), 2) AS avg_salt
+        FROM (
+            SELECT SUM(energy_log) AS daily_kcal, SUM(carbs_log) AS daily_carbs,
+                   SUM(sugar_log) AS daily_sugar, SUM(fat_log) AS daily_fat,
+                   SUM(saturated_fat_log) AS daily_sat_fat, SUM(unsaturated_fat_log) AS daily_unsat_fat,
+                   SUM(protein_log) AS daily_protein, SUM(fiber_log) AS daily_fiber,
+                   SUM(salt_log) AS daily_salt
+            FROM {TABLE_CONSUMPTION_RESOLVED}
+            WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+            GROUP BY date
+        )
+    """, fetch=True)
     summary_rows = []
-    for label_key, view in [("min", VIEW_CONSUMPTION_MIN), ("max", VIEW_CONSUMPTION_MAX), ("avg", VIEW_CONSUMPTION_AVG)]:
-        sdf = execute(f"SELECT * FROM {view}", fetch=True)
+    for label_key in ("min", "max", "avg"):
         cells = []
         for c in display_cols:
             if c == "date":
                 cells.append(html.Td(T[lang][label_key], style={"textAlign": "left", "fontWeight": "bold"}))
-            elif c in numeric_cols and not sdf.empty and c in sdf.columns:
-                val = sdf.iloc[0][c]
+            elif c in numeric_cols and not sdf.empty:
+                col_name = f"{label_key}_{c}"
                 try:
+                    val = sdf.iloc[0][col_name]
                     cells.append(html.Td(round(float(val), 1), style={"textAlign": "right", "fontWeight": "bold"}))
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, KeyError):
                     cells.append(html.Td("", style={"textAlign": "right"}))
             else:
                 cells.append(html.Td("", style={"textAlign": "right"}))
@@ -1137,55 +1221,54 @@ def filter_items(search):
     State("entry-date", "date"),
     State("cons-name", "value"),
     State("cons-pieces", "value"),
-    State("cons-grams", "value"),
-    State("cons-ml", "value"),
+    State("cons-units", "value"),
     State("refresh-trigger", "data"),
     prevent_initial_call=True,
 )
-def save_consumption(n, date_val, name, portions, grams, ml, refresh):
+def save_consumption(n, date_val, name, portions, units, refresh):
     if not n:
         return no_update, no_update
     if not name:
         return "Name is required.", no_update
-    if not any([portions, grams, ml]):
-        return "Enter a quantity (portions, grams, or ml).", no_update
+    if not any([portions, units]):
+        return "Enter a quantity (portions or units).", no_update
 
-    # Look up item in nutrition reference
+    # Look up item in nutrition reference (all columns for resolved persistence)
     existing = execute(
-        f"SELECT name, measurement, has_portion, portion_size FROM {TABLE_NUTRITION} WHERE LOWER(name) = LOWER('{name}') LIMIT 1",
+        f"SELECT name, measurement, has_portion, portion_size, "
+        f"energy_kcal, carbs_g, sugar_g, fat_g, saturated_fat_g, "
+        f"unsaturated_fat_g, protein_g, fiber_g, salt_g "
+        f"FROM {TABLE_NUTRITION} WHERE LOWER(name) = LOWER('{name}') LIMIT 1",
         fetch=True
     )
 
     if existing.empty:
         return "Item not found in nutrition reference. Please register it first.", no_update
 
-    # If only portions given, compute the equivalent g or ml from reference
-    grams_val = grams or 0
-    ml_val = ml or 0
+    ref = existing.iloc[0]
+    measurement = ref["measurement"]
     portions_val = portions or 0
 
-    if portions_val and not grams and not ml:
-        row = existing.iloc[0]
-        portion_size = row["portion_size"]
-        measurement = row["measurement"]
+    # Portions take precedence; if provided, units is disregarded
+    if portions_val:
+        portion_size = ref["portion_size"]
         if portion_size and str(portion_size) not in ('None', 'null', ''):
-            scaled = float(portions_val) * float(portion_size)
-            if measurement == "ml":
-                ml_val = scaled
-            else:
-                grams_val = scaled
+            size = float(portions_val) * float(portion_size)
+        else:
+            size = 0
+    else:
+        size = float(units) if units else 0
 
-    # Log consumption
+    # Persist resolved consumption directly
     now = datetime.datetime.now()
-    execute(f"""
-        INSERT INTO {TABLE_CONSUMPTION} (date, time, name, pieces, grams, ml)
-        VALUES ('{date_val}', '{now.isoformat()}', '{name}', {portions_val}, {grams_val}, {ml_val})
-    """)
+    _resolve_and_insert(date_val, now.isoformat(), name, ref, size)
+
+    unit_label = "ml" if measurement == "ml" else "g"
     msg = f"Logged '{name}'!"
-    if grams_val and portions_val and not grams:
-        msg += f" ({portions_val} portions = {grams_val}g)"
-    elif ml_val and portions_val and not ml:
-        msg += f" ({portions_val} portions = {ml_val}ml)"
+    if portions_val:
+        msg += f" ({portions_val} portions = {size}{unit_label})"
+    else:
+        msg += f" ({size}{unit_label})"
     return msg, (refresh or 0) + 1
 
 
@@ -1193,32 +1276,32 @@ def save_consumption(n, date_val, name, portions, grams, ml, refresh):
 # PDF Export
 # ---------------------------------------------------------------------------
 CONSUMPTION_QUERY = """
-    SELECT c.name, c.pieces AS portions, c.grams, c.ml,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.energy_kcal, 1) AS energy_kcal,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.carbs_g, 1) AS carbs_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.sugar_g, 1) AS sugar_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.fat_g, 1) AS fat_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.saturated_fat_g, 1) AS sat_fat_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.unsaturated_fat_g, 1) AS unsat_fat_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.protein_g, 1) AS protein_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.fiber_g, 1) AS fiber_g,
-        ROUND((COALESCE(NULLIF(c.grams, 0), c.ml, 0)) / 100.0 * n.salt_g, 2) AS salt_g
-    FROM {table_c} c
-    LEFT JOIN {table_n} n ON LOWER(c.name) = LOWER(n.name)
-    WHERE c.date = '{{date_str}}'
-    ORDER BY c.time DESC
+    SELECT name,
+        ROUND(measurement_size, 1) AS measurement_size,
+        ROUND(energy_log, 1) AS energy_kcal,
+        ROUND(carbs_log, 1) AS carbs_g,
+        ROUND(sugar_log, 1) AS sugar_g,
+        ROUND(fat_log, 1) AS fat_g,
+        ROUND(saturated_fat_log, 1) AS sat_fat_g,
+        ROUND(unsaturated_fat_log, 1) AS unsat_fat_g,
+        ROUND(protein_log, 1) AS protein_g,
+        ROUND(fiber_log, 1) AS fiber_g,
+        ROUND(salt_log, 2) AS salt_g
+    FROM {table}
+    WHERE date = '{{date_str}}'
+    ORDER BY time DESC
 """
 
 
 def _pdf_add_day_table(pdf, date_str, lang):
     """Add one day's consumption table to the PDF. Returns True if data was added."""
-    query = CONSUMPTION_QUERY.format(table_c=TABLE_CONSUMPTION, table_n=TABLE_NUTRITION).replace("{date_str}", date_str)
+    query = CONSUMPTION_QUERY.format(table=TABLE_CONSUMPTION_RESOLVED).replace("{date_str}", date_str)
     df = execute(query, fetch=True)
     if df.empty:
         return False
 
     headers = [col_header(c, lang) for c in df.columns]
-    numeric_cols = ["portions", "grams", "ml", "energy_kcal", "carbs_g", "sugar_g",
+    numeric_cols = ["measurement_size", "energy_kcal", "carbs_g", "sugar_g",
                     "fat_g", "sat_fat_g", "unsat_fat_g", "protein_g", "fiber_g", "salt_g"]
 
     # Column widths: name gets more space, numeric cols share the rest
