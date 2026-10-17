@@ -140,11 +140,9 @@ def _insert_resolved(date_val, time_val, name, measurement_size, measurement_typ
     """)
 
 
-def _resolve_and_insert(date_val, time_val, name, ref_row, grams_val, ml_val):
+def _resolve_and_insert(date_val, time_val, name, ref_row, size):
     """Compute resolved nutritional values from a nutrition_reference row and insert."""
     measurement = ref_row["measurement"]
-    # Total measurement size in g or ml
-    size = float(grams_val) if measurement == "g" else float(ml_val)
     factor = size / 100.0
     _insert_resolved(
         date_val=date_val,
@@ -270,15 +268,14 @@ T = {
         "log_consumption": "Log Consumption",
         "food_drink": "Food/Drink name",
         "portions": "Portions",
-        "grams": "Grams",
-        "ml": "ml",
+        "units": "Units",
         "consumption_log": "Consumption Log",
         "no_entries": "No entries for this date.",
         "no_entries_yet": "No entries yet.",
         "total": "TOTAL",
         "no_match": "No matching items found.",
         "not_found": "Item not found in nutrition reference. Please register it first.",
-        "qty_required": "Enter a quantity (portions, grams, or ml).",
+        "qty_required": "Enter a quantity (portions or units).",
         "logged": "Logged",
         "tab_reports": "Reports",
         "tab_entry": "Data Entry",
@@ -333,15 +330,14 @@ T = {
         "log_consumption": "Fogyaszt\u00e1s r\u00f6gz\u00edt\u00e9se",
         "food_drink": "\u00c9tel/Ital n\u00e9v",
         "portions": "Adag",
-        "grams": "Gramm",
-        "ml": "ml",
+        "units": "Egység",
         "consumption_log": "Fogyaszt\u00e1si napl\u00f3",
         "no_entries": "Nincs bejegyz\u00e9s erre a napra.",
         "no_entries_yet": "M\u00e9g nincs bejegyz\u00e9s.",
         "total": "\u00d6SSZESEN",
         "no_match": "Nincs tal\u00e1lat.",
         "not_found": "Nem tal\u00e1lhat\u00f3 a t\u00e1p\u00e9rt\u00e9k referenci\u00e1ban. Regisztr\u00e1ld el\u0151sz\u00f6r!",
-        "qty_required": "Adj meg mennyis\u00e9get (adag, gramm, vagy ml).",
+        "qty_required": "Adj meg mennyis\u00e9get (adag vagy egység).",
         "logged": "R\u00f6gz\u00edtve",
         "tab_reports": "Eredm\u00e9nyek",
         "health_summary": "Eg\u00e9szs\u00e9g\u00fcgyi \u00f6sszefoglal\u00f3",
@@ -360,8 +356,6 @@ T = {
 COL_NAMES = {
     "name": "name",
     "portions": "portions",
-    "grams": "grams",
-    "ml": "ml",
     "energy_kcal": "energy",
     "carbs_g": "carbs",
     "sugar_g": "sugar",
@@ -526,8 +520,7 @@ def render_entry_tab(lang):
                          searchable=True, style={"width": "250px"}),
             html.Div(id="cons-suggestions", style={"fontSize": "12px", "color": "#555", "marginLeft": "5px"}),
             html.Label(T[lang]["portions"]), dcc.Input(id="cons-pieces", type="number", step=0.5, style={"width": "70px"}),
-            html.Label(T[lang]["grams"]), dcc.Input(id="cons-grams", type="number", style={"width": "70px"}),
-            html.Label(T[lang]["ml"]), dcc.Input(id="cons-ml", type="number", style={"width": "70px"}),
+            html.Label(T[lang]["units"]), dcc.Input(id="cons-units", type="number", style={"width": "70px"}),
             html.Button(T[lang]["save"], id="cons-save", n_clicks=0),
         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap", "gap": "5px"}),
         html.Div(id="cons-msg", style={"marginTop": "5px", "color": "green"}),
@@ -1228,18 +1221,17 @@ def filter_items(search):
     State("entry-date", "date"),
     State("cons-name", "value"),
     State("cons-pieces", "value"),
-    State("cons-grams", "value"),
-    State("cons-ml", "value"),
+    State("cons-units", "value"),
     State("refresh-trigger", "data"),
     prevent_initial_call=True,
 )
-def save_consumption(n, date_val, name, portions, grams, ml, refresh):
+def save_consumption(n, date_val, name, portions, units, refresh):
     if not n:
         return no_update, no_update
     if not name:
         return "Name is required.", no_update
-    if not any([portions, grams, ml]):
-        return "Enter a quantity (portions, grams, or ml).", no_update
+    if not any([portions, units]):
+        return "Enter a quantity (portions or units).", no_update
 
     # Look up item in nutrition reference (all columns for resolved persistence)
     existing = execute(
@@ -1254,31 +1246,29 @@ def save_consumption(n, date_val, name, portions, grams, ml, refresh):
         return "Item not found in nutrition reference. Please register it first.", no_update
 
     ref = existing.iloc[0]
-
-    # If only portions given, compute the equivalent g or ml from reference
-    grams_val = grams or 0
-    ml_val = ml or 0
+    measurement = ref["measurement"]
     portions_val = portions or 0
 
-    if portions_val and not grams and not ml:
+    # Portions take precedence; if provided, units is disregarded
+    if portions_val:
         portion_size = ref["portion_size"]
-        measurement = ref["measurement"]
         if portion_size and str(portion_size) not in ('None', 'null', ''):
-            scaled = float(portions_val) * float(portion_size)
-            if measurement == "ml":
-                ml_val = scaled
-            else:
-                grams_val = scaled
+            size = float(portions_val) * float(portion_size)
+        else:
+            size = 0
+    else:
+        size = float(units) if units else 0
 
     # Persist resolved consumption directly
     now = datetime.datetime.now()
-    _resolve_and_insert(date_val, now.isoformat(), name, ref, grams_val, ml_val)
+    _resolve_and_insert(date_val, now.isoformat(), name, ref, size)
 
+    unit_label = "ml" if measurement == "ml" else "g"
     msg = f"Logged '{name}'!"
-    if grams_val and portions_val and not grams:
-        msg += f" ({portions_val} portions = {grams_val}g)"
-    elif ml_val and portions_val and not ml:
-        msg += f" ({portions_val} portions = {ml_val}ml)"
+    if portions_val:
+        msg += f" ({portions_val} portions = {size}{unit_label})"
+    else:
+        msg += f" ({size}{unit_label})"
     return msg, (refresh or 0) + 1
 
 
