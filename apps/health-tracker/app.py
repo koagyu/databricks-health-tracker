@@ -974,11 +974,12 @@ def _r1(val):
 
 
 def _build_health_table(lang):
-    """Build the health metrics table from the report view (last year)."""
+    """Build the health metrics table from the report view (last 2 weeks)."""
     df = execute(f"""
         SELECT date, weight_kg, sys_morning, dia_morning, pulse_morning,
                sys_evening, dia_evening, pulse_evening
         FROM {VIEW_HEALTH_REPORT}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
     if df.empty:
