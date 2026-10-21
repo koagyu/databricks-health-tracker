@@ -27,7 +27,6 @@ TABLE_NUTRITION = f"`{CATALOG}`.`{SCHEMA}`.nutrition_reference"
 TABLE_CONSUMPTION_RESOLVED = f"`{CATALOG}`.`{SCHEMA}`.consumption_resolved"
 
 VIEW_HEALTH_REPORT = f"`{CATALOG}`.`{SCHEMA}`.health_metrics_report"
-VIEW_CONSUMPTION_REPORT = f"`{CATALOG}`.`{SCHEMA}`.consumption_report"
 VIEW_CONSUMPTION_AVG = f"`{CATALOG}`.`{SCHEMA}`.consumption_avg"
 VIEW_CONSUMPTION_MAX = f"`{CATALOG}`.`{SCHEMA}`.consumption_max"
 VIEW_CONSUMPTION_MIN = f"`{CATALOG}`.`{SCHEMA}`.consumption_min"
@@ -975,11 +974,12 @@ def _r1(val):
 
 
 def _build_health_table(lang):
-    """Build the health metrics table from the report view (last year)."""
+    """Build the health metrics table from the report view (last 2 weeks)."""
     df = execute(f"""
         SELECT date, weight_kg, sys_morning, dia_morning, pulse_morning,
                sys_evening, dia_evening, pulse_evening
         FROM {VIEW_HEALTH_REPORT}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
     if df.empty:
@@ -1116,7 +1116,7 @@ def load_health_report(_, lang):
     Input("lang-select", "value"),
 )
 def load_consumption_report(_, lang):
-    """Load daily consumption summary from the consumption_report view (last year)."""
+    """Load daily consumption summary from the consumption_resolved table (last 2 weeks)."""
     lang = lang or "en"
 
     df = execute(f"""
@@ -1131,7 +1131,7 @@ def load_consumption_report(_, lang):
                ROUND(SUM(fiber_log), 1) AS fiber,
                ROUND(SUM(salt_log), 2) AS salt
         FROM {TABLE_CONSUMPTION_RESOLVED}
-        WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         GROUP BY date
         ORDER BY date
     """, fetch=True)
@@ -1159,7 +1159,7 @@ def load_consumption_report(_, lang):
                    SUM(protein_log) AS daily_protein, SUM(fiber_log) AS daily_fiber,
                    SUM(salt_log) AS daily_salt
             FROM {TABLE_CONSUMPTION_RESOLVED}
-            WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+            WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
             GROUP BY date
         )
     """, fetch=True)
@@ -1376,11 +1376,12 @@ def _pdf_add_day_table(pdf, date_str, lang):
 
 
 def _pdf_add_health_table(pdf, lang):
-    """Add health metrics table to PDF (last year from view). Returns True if data was added."""
+    """Add health metrics table to PDF (last 2 weeks from view). Returns True if data was added."""
     df = execute(f"""
         SELECT date, weight_kg, sys_morning, dia_morning, pulse_morning,
                sys_evening, dia_evening, pulse_evening
         FROM {VIEW_HEALTH_REPORT}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
     if df.empty:
@@ -1446,6 +1447,27 @@ def _pdf_add_health_table(pdf, lang):
             align = "L" if c == "date" else "R"
             pdf.cell(col_widths[i], row_h, val, border=1, align=align)
         pdf.ln()
+
+    # Summary rows (min / max / avg), same logic as the on-screen health report
+    pdf.set_font("DejaVu", "B", 7)
+    for label_key in ("min", "max", "avg"):
+        for i, c in enumerate(df.columns):
+            if c == "date":
+                val = T[lang][label_key]
+                align = "L"
+            else:
+                vals = pd.to_numeric(df[c], errors="coerce").dropna()
+                if vals.empty:
+                    val = ""
+                elif label_key == "min":
+                    val = str(round(float(vals.min()), 1))
+                elif label_key == "max":
+                    val = str(round(float(vals.max()), 1))
+                else:
+                    val = str(round(float(vals.mean()), 1))
+                align = "R"
+            pdf.cell(col_widths[i], row_h, val, border=1, align=align)
+        pdf.ln()
     return True
 
 
@@ -1456,7 +1478,7 @@ def _pdf_add_health_table(pdf, lang):
     prevent_initial_call=True,
 )
 def export_pdf(n_clicks, lang):
-    """Generate and download a PDF report (last year from views)."""
+    """Generate and download a PDF report (last 2 weeks from views)."""
     if not n_clicks:
         return no_update
     lang = lang or "en"
@@ -1482,9 +1504,19 @@ def export_pdf(n_clicks, lang):
     pdf.ln(2)
 
     cons_df = execute(f"""
-        SELECT date, kcal, carbs, sugar, fat, saturated_fat, unsaturated_fat,
-               protein, fiber, salt
-        FROM {VIEW_CONSUMPTION_REPORT}
+        SELECT date,
+               ROUND(SUM(energy_log), 1) AS kcal,
+               ROUND(SUM(carbs_log), 1) AS carbs,
+               ROUND(SUM(sugar_log), 1) AS sugar,
+               ROUND(SUM(fat_log), 1) AS fat,
+               ROUND(SUM(saturated_fat_log), 1) AS saturated_fat,
+               ROUND(SUM(unsaturated_fat_log), 1) AS unsaturated_fat,
+               ROUND(SUM(protein_log), 1) AS protein,
+               ROUND(SUM(fiber_log), 1) AS fiber,
+               ROUND(SUM(salt_log), 2) AS salt
+        FROM {TABLE_CONSUMPTION_RESOLVED}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
+        GROUP BY date
         ORDER BY date
     """, fetch=True)
     if cons_df.empty:
@@ -1538,17 +1570,39 @@ def export_pdf(n_clicks, lang):
                 pdf.cell(cons_col_widths[i], row_h, val, border=1, align=align)
             pdf.ln()
 
-        # Summary rows (min / max / avg)
+        # Summary rows (min / max / avg) over daily totals from consumption_resolved
         pdf.set_font("DejaVu", "B", 7)
-        for label_key, view in [("min", VIEW_CONSUMPTION_MIN), ("max", VIEW_CONSUMPTION_MAX), ("avg", VIEW_CONSUMPTION_AVG)]:
-            sdf = execute(f"SELECT * FROM {view}", fetch=True)
+        sdf = execute(f"""
+            SELECT
+                MIN(kcal) AS min_kcal, MAX(kcal) AS max_kcal, AVG(kcal) AS avg_kcal,
+                MIN(carbs) AS min_carbs, MAX(carbs) AS max_carbs, AVG(carbs) AS avg_carbs,
+                MIN(sugar) AS min_sugar, MAX(sugar) AS max_sugar, AVG(sugar) AS avg_sugar,
+                MIN(fat) AS min_fat, MAX(fat) AS max_fat, AVG(fat) AS avg_fat,
+                MIN(saturated_fat) AS min_saturated_fat, MAX(saturated_fat) AS max_saturated_fat, AVG(saturated_fat) AS avg_saturated_fat,
+                MIN(unsaturated_fat) AS min_unsaturated_fat, MAX(unsaturated_fat) AS max_unsaturated_fat, AVG(unsaturated_fat) AS avg_unsaturated_fat,
+                MIN(protein) AS min_protein, MAX(protein) AS max_protein, AVG(protein) AS avg_protein,
+                MIN(fiber) AS min_fiber, MAX(fiber) AS max_fiber, AVG(fiber) AS avg_fiber,
+                MIN(salt) AS min_salt, MAX(salt) AS max_salt, AVG(salt) AS avg_salt
+            FROM (
+                SELECT SUM(energy_log) AS kcal, SUM(carbs_log) AS carbs,
+                       SUM(sugar_log) AS sugar, SUM(fat_log) AS fat,
+                       SUM(saturated_fat_log) AS saturated_fat, SUM(unsaturated_fat_log) AS unsaturated_fat,
+                       SUM(protein_log) AS protein, SUM(fiber_log) AS fiber,
+                       SUM(salt_log) AS salt
+                FROM {TABLE_CONSUMPTION_RESOLVED}
+                WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
+                GROUP BY date
+            )
+        """, fetch=True)
+        for label_key in ("min", "max", "avg"):
             for i, c in enumerate(cons_df.columns):
+                col_name = f"{label_key}_{c}"
                 if c == "date":
                     val = T[lang][label_key]
                     align = "L"
-                elif not sdf.empty and c in sdf.columns:
+                elif not sdf.empty and col_name in sdf.columns:
                     try:
-                        val = str(round(float(sdf.iloc[0][c]), 1))
+                        val = str(round(float(sdf.iloc[0][col_name]), 2 if c == "salt" else 1))
                     except (ValueError, TypeError):
                         val = ""
                     align = "R"
