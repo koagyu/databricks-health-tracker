@@ -1447,6 +1447,27 @@ def _pdf_add_health_table(pdf, lang):
             align = "L" if c == "date" else "R"
             pdf.cell(col_widths[i], row_h, val, border=1, align=align)
         pdf.ln()
+
+    # Summary rows (min / max / avg), same logic as the on-screen health report
+    pdf.set_font("DejaVu", "B", 7)
+    for label_key in ("min", "max", "avg"):
+        for i, c in enumerate(df.columns):
+            if c == "date":
+                val = T[lang][label_key]
+                align = "L"
+            else:
+                vals = pd.to_numeric(df[c], errors="coerce").dropna()
+                if vals.empty:
+                    val = ""
+                elif label_key == "min":
+                    val = str(round(float(vals.min()), 1))
+                elif label_key == "max":
+                    val = str(round(float(vals.max()), 1))
+                else:
+                    val = str(round(float(vals.mean()), 1))
+                align = "R"
+            pdf.cell(col_widths[i], row_h, val, border=1, align=align)
+        pdf.ln()
     return True
 
 
