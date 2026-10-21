@@ -1376,11 +1376,12 @@ def _pdf_add_day_table(pdf, date_str, lang):
 
 
 def _pdf_add_health_table(pdf, lang):
-    """Add health metrics table to PDF (last year from view). Returns True if data was added."""
+    """Add health metrics table to PDF (last 2 weeks from view). Returns True if data was added."""
     df = execute(f"""
         SELECT date, weight_kg, sys_morning, dia_morning, pulse_morning,
                sys_evening, dia_evening, pulse_evening
         FROM {VIEW_HEALTH_REPORT}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
     if df.empty:
