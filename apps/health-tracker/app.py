@@ -1457,7 +1457,7 @@ def _pdf_add_health_table(pdf, lang):
     prevent_initial_call=True,
 )
 def export_pdf(n_clicks, lang):
-    """Generate and download a PDF report (last year from views)."""
+    """Generate and download a PDF report (last 2 weeks from views)."""
     if not n_clicks:
         return no_update
     lang = lang or "en"
@@ -1486,6 +1486,7 @@ def export_pdf(n_clicks, lang):
         SELECT date, kcal, carbs, sugar, fat, saturated_fat, unsaturated_fat,
                protein, fiber, salt
         FROM {VIEW_CONSUMPTION_REPORT}
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
     if cons_df.empty:
