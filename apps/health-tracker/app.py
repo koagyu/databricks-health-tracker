@@ -27,7 +27,6 @@ TABLE_NUTRITION = f"`{CATALOG}`.`{SCHEMA}`.nutrition_reference"
 TABLE_CONSUMPTION_RESOLVED = f"`{CATALOG}`.`{SCHEMA}`.consumption_resolved"
 
 VIEW_HEALTH_REPORT = f"`{CATALOG}`.`{SCHEMA}`.health_metrics_report"
-VIEW_CONSUMPTION_REPORT = f"`{CATALOG}`.`{SCHEMA}`.consumption_report"
 VIEW_CONSUMPTION_AVG = f"`{CATALOG}`.`{SCHEMA}`.consumption_avg"
 VIEW_CONSUMPTION_MAX = f"`{CATALOG}`.`{SCHEMA}`.consumption_max"
 VIEW_CONSUMPTION_MIN = f"`{CATALOG}`.`{SCHEMA}`.consumption_min"
@@ -1116,7 +1115,7 @@ def load_health_report(_, lang):
     Input("lang-select", "value"),
 )
 def load_consumption_report(_, lang):
-    """Load daily consumption summary from the consumption_report view (last year)."""
+    """Load daily consumption summary from the consumption_resolved table (last 2 weeks)."""
     lang = lang or "en"
 
     df = execute(f"""
@@ -1131,7 +1130,7 @@ def load_consumption_report(_, lang):
                ROUND(SUM(fiber_log), 1) AS fiber,
                ROUND(SUM(salt_log), 2) AS salt
         FROM {TABLE_CONSUMPTION_RESOLVED}
-        WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+        WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         GROUP BY date
         ORDER BY date
     """, fetch=True)
@@ -1159,7 +1158,7 @@ def load_consumption_report(_, lang):
                    SUM(protein_log) AS daily_protein, SUM(fiber_log) AS daily_fiber,
                    SUM(salt_log) AS daily_salt
             FROM {TABLE_CONSUMPTION_RESOLVED}
-            WHERE date >= DATE_SUB(CURRENT_DATE(), 365)
+            WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
             GROUP BY date
         )
     """, fetch=True)
@@ -1485,7 +1484,7 @@ def export_pdf(n_clicks, lang):
     cons_df = execute(f"""
         SELECT date, kcal, carbs, sugar, fat, saturated_fat, unsaturated_fat,
                protein, fiber, salt
-        FROM {VIEW_CONSUMPTION_REPORT}
+        FROM {TABLE_CONSUMPTION_RESOLVED}
         WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
         ORDER BY date
     """, fetch=True)
