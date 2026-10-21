@@ -1483,10 +1483,19 @@ def export_pdf(n_clicks, lang):
     pdf.ln(2)
 
     cons_df = execute(f"""
-        SELECT date, kcal, carbs, sugar, fat, saturated_fat, unsaturated_fat,
-               protein, fiber, salt
+        SELECT date,
+               ROUND(SUM(energy_log), 1) AS kcal,
+               ROUND(SUM(carbs_log), 1) AS carbs,
+               ROUND(SUM(sugar_log), 1) AS sugar,
+               ROUND(SUM(fat_log), 1) AS fat,
+               ROUND(SUM(saturated_fat_log), 1) AS saturated_fat,
+               ROUND(SUM(unsaturated_fat_log), 1) AS unsaturated_fat,
+               ROUND(SUM(protein_log), 1) AS protein,
+               ROUND(SUM(fiber_log), 1) AS fiber,
+               ROUND(SUM(salt_log), 2) AS salt
         FROM {TABLE_CONSUMPTION_RESOLVED}
         WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
+        GROUP BY date
         ORDER BY date
     """, fetch=True)
     if cons_df.empty:
@@ -1540,17 +1549,39 @@ def export_pdf(n_clicks, lang):
                 pdf.cell(cons_col_widths[i], row_h, val, border=1, align=align)
             pdf.ln()
 
-        # Summary rows (min / max / avg)
+        # Summary rows (min / max / avg) over daily totals from consumption_resolved
         pdf.set_font("DejaVu", "B", 7)
-        for label_key, view in [("min", VIEW_CONSUMPTION_MIN), ("max", VIEW_CONSUMPTION_MAX), ("avg", VIEW_CONSUMPTION_AVG)]:
-            sdf = execute(f"SELECT * FROM {view}", fetch=True)
+        sdf = execute(f"""
+            SELECT
+                MIN(kcal) AS min_kcal, MAX(kcal) AS max_kcal, AVG(kcal) AS avg_kcal,
+                MIN(carbs) AS min_carbs, MAX(carbs) AS max_carbs, AVG(carbs) AS avg_carbs,
+                MIN(sugar) AS min_sugar, MAX(sugar) AS max_sugar, AVG(sugar) AS avg_sugar,
+                MIN(fat) AS min_fat, MAX(fat) AS max_fat, AVG(fat) AS avg_fat,
+                MIN(saturated_fat) AS min_saturated_fat, MAX(saturated_fat) AS max_saturated_fat, AVG(saturated_fat) AS avg_saturated_fat,
+                MIN(unsaturated_fat) AS min_unsaturated_fat, MAX(unsaturated_fat) AS max_unsaturated_fat, AVG(unsaturated_fat) AS avg_unsaturated_fat,
+                MIN(protein) AS min_protein, MAX(protein) AS max_protein, AVG(protein) AS avg_protein,
+                MIN(fiber) AS min_fiber, MAX(fiber) AS max_fiber, AVG(fiber) AS avg_fiber,
+                MIN(salt) AS min_salt, MAX(salt) AS max_salt, AVG(salt) AS avg_salt
+            FROM (
+                SELECT SUM(energy_log) AS kcal, SUM(carbs_log) AS carbs,
+                       SUM(sugar_log) AS sugar, SUM(fat_log) AS fat,
+                       SUM(saturated_fat_log) AS saturated_fat, SUM(unsaturated_fat_log) AS unsaturated_fat,
+                       SUM(protein_log) AS protein, SUM(fiber_log) AS fiber,
+                       SUM(salt_log) AS salt
+                FROM {TABLE_CONSUMPTION_RESOLVED}
+                WHERE date >= DATE_SUB(CURRENT_DATE(), 14)
+                GROUP BY date
+            )
+        """, fetch=True)
+        for label_key in ("min", "max", "avg"):
             for i, c in enumerate(cons_df.columns):
+                col_name = f"{label_key}_{c}"
                 if c == "date":
                     val = T[lang][label_key]
                     align = "L"
-                elif not sdf.empty and c in sdf.columns:
+                elif not sdf.empty and col_name in sdf.columns:
                     try:
-                        val = str(round(float(sdf.iloc[0][c]), 1))
+                        val = str(round(float(sdf.iloc[0][col_name]), 2 if c == "salt" else 1))
                     except (ValueError, TypeError):
                         val = ""
                     align = "R"
